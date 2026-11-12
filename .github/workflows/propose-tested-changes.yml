@@ -31,19 +31,19 @@ jobs:
       - name: Check out exactly the tested development commit
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Propose a draft PR; never merge or deploy
         shell: bash
         env:
-          GH_TOKEN: \${{ secrets.PRODUCTION_SYNC_TOKEN }}
-          SOURCE_GITHUB_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ secrets.PRODUCTION_SYNC_TOKEN }}
+          SOURCE_GITHUB_TOKEN: ${{ github.token }}
           SOURCE_REPO: doe931397-rgb/AI-Sales-Agent
           TARGET_REPO: Maahi17yr/AI-sales-agent
-          TESTED_SHA: \${{ github.event.workflow_run.head_sha }}
-          CI_RUN_URL: \${{ github.event.workflow_run.html_url }}
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
           set -euo pipefail
           if [[ -z "$GH_TOKEN" ]]; then
