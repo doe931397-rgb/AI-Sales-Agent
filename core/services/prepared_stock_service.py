@@ -267,11 +267,11 @@ def set_active(owner, product_id, variant, active):
                 if not active:
                     referenced = conn.execute("""
                         SELECT 1 FROM prepared_stock_addon_links
-                        WHERE (source = 'self_extra' AND product_id = ? AND target_variant IS NULL)
+                        WHERE (product_id = ? AND ? = 'standard')
                            OR (source = 'prepared_other' AND target_product_id = ?
                                AND target_variant = ?)
                         LIMIT 1
-                    """, (product_id, product_id, variant)).fetchone()
+                    """, (product_id, variant, product_id, variant)).fetchone()
                     if referenced:
                         raise ValueError("Remove prepared add-on mappings before deactivating this stock.")
                 conn.execute("""UPDATE prepared_stock SET active = ?
@@ -342,7 +342,7 @@ def map_addon(owner, product_id, ingredient_id, source, target_product_id=None,
                 if target_product_id == product_id and target_variant == "standard":
                     raise ValueError("Choose self-extra for servings from the same food pot.")
                 target = stock_policy.active_prepared(
-                    conn, target_product_id, target_variant)
+                    conn, target_product_id, target_variant, lock=True)
                 if not target or not target["active"]:
                     raise ValueError("Target side must have active prepared stock.")
             else:
