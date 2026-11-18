@@ -66,6 +66,50 @@ def create_tables():
             )
         """)
 
+
+        # Prepared-food stock is opt-in and deliberately separate from the
+        # legacy portion-count table. Checkout continues to use the legacy
+        # table until a separately tested cutover is approved.
+        # Amounts are whole g, mL, or pieces; no floating point stock math.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS prepared_stock (
+                product_id INTEGER NOT NULL,
+                variant TEXT NOT NULL DEFAULT 'standard',
+                unit TEXT NOT NULL CHECK (unit IN ('g', 'ml', 'piece')),
+                quantity_units INTEGER NOT NULL DEFAULT 0 CHECK (quantity_units >= 0),
+                serving_units INTEGER NOT NULL CHECK (serving_units > 0),
+                tolerance_units INTEGER NOT NULL DEFAULT 0
+                    CHECK (tolerance_units >= 0 AND tolerance_units < serving_units),
+                extra_units INTEGER NOT NULL CHECK (extra_units > 0),
+                extra_tolerance_units INTEGER NOT NULL DEFAULT 0
+                    CHECK (extra_tolerance_units >= 0 AND extra_tolerance_units < extra_units),
+                extra_price INTEGER NOT NULL DEFAULT 0 CHECK (extra_price >= 0),
+                PRIMARY KEY (product_id, variant),
+                FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE RESTRICT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS prepared_stock_movements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER NOT NULL,
+                variant TEXT NOT NULL DEFAULT 'standard',
+                actor_customer_id INTEGER NOT NULL,
+                action TEXT NOT NULL CHECK (action IN ('add', 'remove', 'set')),
+                change_units INTEGER NOT NULL,
+                before_units INTEGER NOT NULL CHECK (before_units >= 0),
+                after_units INTEGER NOT NULL CHECK (after_units >= 0),
+                reason TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (product_id, variant)
+                    REFERENCES prepared_stock(product_id, variant) ON DELETE RESTRICT,
+                FOREIGN KEY (actor_customer_id) REFERENCES customers(id)
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_prepared_stock_movements_recent
+            ON prepared_stock_movements(product_id, variant, id)
+        """)
+
         # 3. CUSTOMERS
         conn.execute("""
             CREATE TABLE IF NOT EXISTS customers (
