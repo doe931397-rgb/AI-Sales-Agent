@@ -112,7 +112,7 @@ def get_stocks_by_variants(product_variants):
             where = " OR ".join("(product_id = ? AND variant = ?)" for _ in subset)
             params = [value for pair in subset for value in pair]
             rows = conn.execute(
-                """"SELECT i.product_id, i.variant,
+                """SELECT i.product_id, i.variant,
                    CASE WHEN ps.active = 1
                         THEN ps.quantity_units / (ps.serving_units + ps.tolerance_units)
                         ELSE i.quantity END AS quantity
