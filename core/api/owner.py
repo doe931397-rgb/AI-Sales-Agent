@@ -49,7 +49,8 @@ class PreparedStockAdjustment(BaseModel):
 @router.get("/prepared-stock")
 def owner_prepared_stock(request: Request):
     require_owner(request)
-    return {"items": prepared_stock.list_stocks(), "checkout_enabled": False}
+    items = prepared_stock.list_stocks()
+    return {"items": items, "checkout_enabled": any(item["active"] for item in items)
 
 
 @router.get("/prepared-stock/history")
