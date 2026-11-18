@@ -1,8 +1,8 @@
-"""Owner-only prepared-food inventory, independent from legacy checkout stock.
+"""Owner-only prepared-food configuration and stock movements.
 
 Never trust frontend-supplied owner identities. Call only after require_owner.
 Amounts are integer grams, millilitres, or whole pieces. Customer storefront
-and checkout cannot read this table until a reviewed cutover is implemented.
+and checkout only consume this table for explicitly activated variants.
 """
 import os
 from contextlib import closing
@@ -99,6 +99,9 @@ def configure(owner, config):
     with closing(get_connection()) as conn:
         try:
             conn.execute("BEGIN IMMEDIATE")
+            # Follow checkout's product-first lock order before changing serving
+            # estimates, extra prices or units on a prepared stock record.
+            _lock_product(conn, product_id)
             inventory = conn.execute("""
                 SELECT 1 FROM inventory WHERE product_id = ? AND variant = ?
             """, (product_id, variant)).fetchone()
