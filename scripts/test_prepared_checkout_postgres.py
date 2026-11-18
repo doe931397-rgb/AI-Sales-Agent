@@ -5,7 +5,8 @@ The CI guard refuses real databases. Exercises row locking and rollback.
 import json
 import os
 import unittest
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from threading import Event
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -157,6 +158,74 @@ class PreparedCheckoutPostgresTests(unittest.TestCase):
         with models.get_connection() as conn:
             self.assertEqual(conn.execute("""SELECT COUNT(*) FROM prepared_order_deductions
                 WHERE product_id=?""",(self.pid,)).fetchone()[0],1)
+
+
+    def test_checkout_locks_prepared_other_before_owner_changes_serving_size(self):
+        """A separate chicken/side source cannot be reconfigured mid-checkout."""
+        with models.get_connection() as conn:
+            target=conn.execute("INSERT INTO products(name,category,price) VALUES (?, 'Sides', 1000)",
+                (f"Fictional Prepared Side {self.suffix}",)).lastrowid
+            conn.execute("INSERT INTO inventory(product_id,variant,quantity) VALUES (?,'standard',10)",
+                (target,))
+        def payload(standard):
+            return dict(product_id=target,variant="standard",unit="g",
+                serving_units=standard,tolerance_units=10,extra_units=125,
+                extra_tolerance_units=10,extra_price=500)
+        stock.configure(self.owner,payload(250))
+        stock.adjust(self.owner,dict(product_id=target,variant="standard",
+            action="add",quantity_units=520,reason="Two side servings available"))
+        stock.set_active(self.owner,target,"standard",True)
+        stock.map_addon(self.owner,self.pid,self.extra,"prepared_other",target,"standard")
+        sid,review=self.prepare(self.customer_ids[0],extra=True)
+
+        locked=Event()
+        release=Event()
+        attempted=Event()
+        real_lock=stock_policy.lock_prepared_sources
+        real_owner_lock=stock._lock_product
+
+        def pause_after_source_lock(conn, items):
+            real_lock(conn,items)
+            locked.set()
+            if not release.wait(timeout=15):
+                raise ValueError("Timed out waiting to release stock lock")
+
+        def signal_owner_attempt(conn,product_id):
+            if product_id == target:
+                attempted.set()
+            return real_owner_lock(conn,product_id)
+
+        try:
+            with patch("core.services.stock_policy.lock_prepared_sources",
+                       side_effect=pause_after_source_lock), patch.object(
+                           stock,"_lock_product",side_effect=signal_owner_attempt):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    confirmation=pool.submit(self.confirm,sid,review)
+                    self.assertTrue(locked.wait(12),"Checkout never acquired target lock")
+                    reconfigure=pool.submit(stock.configure,self.owner,payload(500))
+                    self.assertTrue(attempted.wait(12),"Owner did not attempt reconfiguration")
+                    # It must wait for checkout to commit, not alter the
+                    # target's serving size between demand and allocation.
+                    with self.assertRaises(FutureTimeout):
+                        reconfigure.result(timeout=0.4)
+                    release.set()
+                    result=confirmation.result(timeout=20)
+                    changed=reconfigure.result(timeout=20)
+        finally:
+            release.set()
+        self.assertTrue(result["success"],result)
+        self.assertEqual(changed["serving_units"],500)
+        with models.get_connection() as conn:
+            row=conn.execute("""SELECT quantity_units FROM prepared_order_deductions
+                WHERE product_id=? AND order_id=?""",(target,result["order_id"])).fetchone()
+            self.assertEqual(row["quantity_units"],260)
+            stock_row=conn.execute("""SELECT quantity_units,serving_units
+                FROM prepared_stock WHERE product_id=?""",(target,)).fetchone()
+            self.assertEqual((stock_row["quantity_units"],stock_row["serving_units"]),
+                             (260,500))
+            self.assertEqual(conn.execute(
+                "SELECT quantity FROM inventory WHERE product_id=?",(target,)
+            ).fetchone()["quantity"],10)
 
 
 if __name__ == "__main__":
