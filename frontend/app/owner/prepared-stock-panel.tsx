@@ -11,15 +11,20 @@ type MenuProduct = {
 type Unit = 'g' | 'ml' | 'piece';
 type Action = 'add' | 'remove' | 'set';
 type StockItem = {
+  active: boolean; inventory_source: 'prepared' | 'legacy';
   product_id: number; product_name: string; variant: string; unit: Unit;
   quantity_units: number; serving_units: number; tolerance_units: number;
   extra_units: number; extra_tolerance_units: number; extra_price: number;
   safe_standard_servings: number; safe_extra_servings: number;
   checkout_enabled: boolean;
 };
+type AddonSource = 'legacy_ingredient' | 'self_extra' | 'prepared_other';
+type Addon = { ingredient_id: number; name: string; extra_price: number; max_quantity: number; source: AddonSource; target_product_id: number | null; target_variant: string | null };
+type AddonDraft = { source: AddonSource; target: string };
 type StockMovement = {
   id: number; product_id: number; variant: string; product_name: string;
-  action: Action; change_units: number; before_units: number;
+  order_id?: number | null;
+  action: Action | 'order'; change_units: number; before_units: number;
   after_units: number; reason: string; created_at: string; actor_name: string;
 };
 type DraftConfig = {
@@ -56,6 +61,9 @@ export default function PreparedStockPanel({ products }: { products: MenuProduct
   const { apiFetch } = useAuth();
   const [items, setItems] = useState<StockItem[]>([]);
   const [history, setHistory] = useState<StockMovement[]>([]);
+  const [addons, setAddons] = useState<Addon[]>([]);
+  const [addonDrafts, setAddonDrafts] = useState<Record<number, AddonDraft>>({});
+  const [extraName, setExtraName] = useState('');
   const [selectedId, setSelectedId] = useState<number>(products[0]?.id || 0);
   const [selectedVariant, setSelectedVariant] = useState('standard');
   const [config, setConfig] = useState<DraftConfig>(initialDraft);
@@ -87,6 +95,28 @@ export default function PreparedStockPanel({ products }: { products: MenuProduct
   }, [apiFetch]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  const refreshAddons = useCallback(async (productId: number) => {
+    if (!productId) return;
+    try {
+      const response = await apiFetch('/owner/prepared-stock/addons/' + productId);
+      if (!response.ok) throw new Error(await apiError(response));
+      const data: { addons: Addon[] } = await response.json();
+      setAddons(data.addons);
+      const drafts: Record<number, AddonDraft> = {};
+      for (const addon of data.addons) {
+        drafts[addon.ingredient_id] = {
+          source: addon.source,
+          target: addon.target_product_id
+            ? addon.target_product_id + ':' + addon.target_variant : '',
+        };
+      }
+      setAddonDrafts(drafts);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not load extras.');
+    }
+  }, [apiFetch]);
+  useEffect(() => { void refreshAddons(selectedId); }, [refreshAddons, selectedId]);
 
   useEffect(() => {
     if (!selectedId && products.length) setSelectedId(products[0].id);
@@ -129,6 +159,78 @@ export default function PreparedStockPanel({ products }: { products: MenuProduct
     } finally { setBusy(false); }
   }
 
+  async function togglePrepared() {
+    if (!selected || busy) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const response = await apiFetch('/owner/prepared-stock/activate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          product_id: selected.product_id, variant: selected.variant,
+          active: !selected.active,
+        }),
+      });
+      if (!response.ok) throw new Error(await apiError(response));
+      await refresh();
+      setNotice('Stock source updated. All customer ordering will use the selected source.');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not switch stock source.');
+    } finally { setBusy(false); }
+  }
+
+  async function saveAddonMapping(addon: Addon) {
+    const draft = addonDrafts[addon.ingredient_id];
+    if (!draft || busy) return;
+    let targetProductId: number | undefined;
+    let targetVariant: string | undefined;
+    if (draft.source === 'prepared_other') {
+      const pair = draft.target.split(':');
+      targetProductId = Number(pair[0]);
+      targetVariant = pair[1];
+      if (!targetProductId || !targetVariant) {
+        setError('Choose an active prepared side before saving its mapping.');
+        return;
+      }
+    }
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const response = await apiFetch('/owner/prepared-stock/addons', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          product_id: selectedId, ingredient_id: addon.ingredient_id,
+          source: draft.source, target_product_id: targetProductId,
+          target_variant: targetVariant,
+        }),
+      });
+      if (!response.ok) throw new Error(await apiError(response));
+      await refreshAddons(selectedId);
+      setNotice('Extra stock source mapping saved.');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not update extra mapping.');
+    } finally { setBusy(false); }
+  }
+
+  async function addSamePotExtra(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selected || !selected.active || busy) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const response = await apiFetch('/owner/prepared-stock/self-extra', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          product_id: selectedId, display_name: extraName.trim(),
+          max_quantity: 2,
+        }),
+      });
+      if (!response.ok) throw new Error(await apiError(response));
+      setExtraName('');
+      await refreshAddons(selectedId);
+      setNotice('Extra serving option created for this meal.');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not add extra option.');
+    } finally { setBusy(false); }
+  }
+
   async function applyAdjustment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selected) return;
@@ -160,9 +262,10 @@ export default function PreparedStockPanel({ products }: { products: MenuProduct
         </div>
       </div>
       <p className="prepared-summary" role="note">
-        <strong>Development preview:</strong> Prepared-food tracking is separate from live
-        checkout for now. These adjustments are logged but do not yet change what
-        customers can order. The old checkout counts remain active until the tested cutover.
+        <strong>Draft feature / not deployed:</strong> Every menu variant starts on
+        legacy checkout stock. You can activate a prepared record once configured.
+        On activation, customer orders use conservative prepared portions.
+        Any changes here affect only the development test environment until approved.
       </p>
       {notice && <p className="owner-message success" role="status">{notice}</p>}
       {error && <p className="owner-message error" role="alert">{error}</p>}
@@ -173,12 +276,15 @@ export default function PreparedStockPanel({ products }: { products: MenuProduct
         {items.length ? (
           <div className="owner-table-scroll">
             <table className="owner-table prepared-table">
-              <thead><tr><th>Food / variant</th><th>Prepared quantity</th><th>Conservative servings</th><th>Action</th></tr></thead>
+              <thead><tr><th>Food / variant</th><th>Prepared quantity</th><th>Conservative servings</th><th>Stock source</th><th>Action</th></tr></thead>
               <tbody>{items.map(item => (
                 <tr key={item.product_id + ':' + item.variant} className={selectedId === item.product_id && selectedVariant === item.variant ? 'selected' : ''}>
                   <td><strong>{item.product_name}</strong><small>{item.variant}</small></td>
                   <td>{displayStock(item.quantity_units, item.unit)}</td>
                   <td>{item.safe_standard_servings} standard</td>
+                  <td><span className={'owner-pill ' + (item.active ? 'green' : 'neutral')}>
+                    {item.active ? 'Prepared — active' : 'Legacy — active'}
+                  </span></td>
                   <td><button type="button" className="owner-small-btn ghost" onClick={() => {
                     setSelectedId(item.product_id); setSelectedVariant(item.variant);
                     setNotice(''); setError('');
@@ -246,6 +352,18 @@ export default function PreparedStockPanel({ products }: { products: MenuProduct
       </div>
 
       {selected && <div className="owner-panel">
+        <div className="owner-section-title"><h2>Stock source activation</h2></div>
+        <p>Current checkout source: <strong>{selected.active ? 'Prepared stock' : 'Legacy portion counts'}</strong>.
+        The switch is blocked if unresolved orders rely on the source or an extra still uses it.</p>
+        <div className="prepared-actions">
+          <button className="owner-small-btn" type="button" disabled={busy}
+            onClick={() => void togglePrepared()}>
+            {selected.active ? 'Switch back to legacy' : 'Activate prepared stock'}
+          </button>
+        </div>
+      </div>}
+
+      {selected && <div className="owner-panel">
         <div className="owner-section-title"><h2>Adjust prepared stock</h2><span>{selected.product_name} · {selected.variant}</span></div>
         <div className="prepared-grid">
           <div className="prepared-stat"><span>Physical stock estimate</span><strong>{displayStock(selected.quantity_units, selected.unit)}</strong></div>
@@ -271,13 +389,79 @@ export default function PreparedStockPanel({ products }: { products: MenuProduct
           </label>
           <div className="prepared-actions"><button className="owner-small-btn" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Record adjustment'}</button></div>
         </form>
-        <p className="prepared-muted">An adjustment is recorded with your account, the time, and the reason. This does not yet change the live customer checkout capacity.</p>
+        <p className="prepared-muted">Every adjustment records who changed stock, when,
+        the quantity and the reason. {selected.active
+          ? 'Activated prepared stock directly controls new orders.'
+          : 'Currently inactive; customer orders still use legacy portions.'}</p>
       </div>}
 
       <div className="owner-panel">
-        <div className="owner-section-title"><h2>Adjustment history</h2><span>Latest 50 recorded changes</span></div>
+        <div className="owner-section-title"><h2>Extra servings and sides</h2></div>
+        <p className="prepared-muted">Each extra uses one stock source. Same-pot extras use
+        the meal's extra-serving estimate and its configured price. Separately
+        prepared sides use their own stock and the existing add-on price.
+        Unmapped extras keep their existing independent piece counts.</p>
+        {selected?.active && selectedVariant === 'standard' && <form
+          className="prepared-actions" onSubmit={addSamePotExtra}>
+          <label className="prepared-field" style={{ flex: 1 }}>Create an extra serving choice
+            <input value={extraName} onChange={e => setExtraName(e.target.value)}
+              minLength={3} maxLength={80} required placeholder="e.g. Extra Rice"/>
+          </label>
+          <button className="owner-small-btn" type="submit" disabled={busy}>Create extra</button>
+        </form>}
+        {addons.length ? <div className="owner-table-scroll">
+          <table className="owner-table">
+            <thead><tr><th>Extra</th><th>Current source</th><th>Stock mapping</th><th>Save</th></tr></thead>
+            <tbody>{addons.map(addon => {
+              const draft = addonDrafts[addon.ingredient_id] || {
+                source: addon.source, target: '' };
+              const targets = items.filter(item => item.active &&
+                !(item.product_id === selectedId && item.variant === 'standard'));
+              return <tr key={addon.ingredient_id}>
+                <td><strong>{addon.name}</strong><small>Per-meal maximum {addon.max_quantity}</small></td>
+                <td>{addon.source.replaceAll('_', ' ')}</td>
+                <td>
+                  <select className="owner-search" value={draft.source} disabled={busy}
+                    aria-label={'Stock source for ' + addon.name}
+                    onChange={e => setAddonDrafts(prev => ({
+                      ...prev, [addon.ingredient_id]: {
+                        source: e.target.value as AddonSource,
+                        target: prev[addon.ingredient_id]?.target || '',
+                      },
+                    }))}>
+                    <option value="legacy_ingredient">Existing separate count</option>
+                    <option value="self_extra" disabled={!selected?.active || selectedVariant !== 'standard'}>Same meal / extra serving</option>
+                    <option value="prepared_other" disabled={!selected?.active || !targets.length}>Other prepared product</option>
+                  </select>
+                  {draft.source === 'prepared_other' &&
+                    <select className="owner-search" value={draft.target} disabled={busy}
+                      aria-label={'Prepared target for ' + addon.name}
+                      onChange={e => setAddonDrafts(prev => ({
+                        ...prev, [addon.ingredient_id]: {
+                          ...draft, target: e.target.value,
+                        },
+                      }))}>
+                      <option value="">Choose prepared side</option>
+                      {targets.map(target => <option
+                        key={target.product_id + ':' + target.variant}
+                        value={target.product_id + ':' + target.variant}>
+                        {target.product_name} · {target.variant}
+                      </option>)}
+                    </select>}
+                </td>
+                <td><button className="owner-small-btn ghost" type="button"
+                  disabled={busy || (draft.source === 'prepared_other' && !draft.target)}
+                  onClick={() => void saveAddonMapping(addon)}>Save</button></td>
+              </tr>;
+            })}</tbody>
+          </table>
+        </div> : <p className="owner-empty">No approved extras configured for this menu item.</p>}
+      </div>
+
+      <div className="owner-panel">
+        <div className="owner-section-title"><h2>Adjustment and order history</h2><span>Latest 50 recorded changes</span></div>
         {history.length ? <div className="owner-table-scroll"><table className="owner-table">
-          <thead><tr><th>Meal</th><th>Action</th><th>Change</th><th>Stock after</th><th>Reason</th><th>By</th></tr></thead>
+          <thead><tr><th>Meal</th><th>Action</th><th>Change</th><th>Stock after</th><th>Reason / order</th><th>By</th></tr></thead>
           <tbody>{history.map(move => {
             const configItem = items.find(item => item.product_id === move.product_id && item.variant === move.variant);
             const unit = configItem?.unit || 'g';
@@ -286,7 +470,7 @@ export default function PreparedStockPanel({ products }: { products: MenuProduct
               <td>{move.action}</td>
               <td>{displayStock(move.change_units, unit)}</td>
               <td>{displayStock(move.after_units, unit)}</td>
-              <td>{move.reason}</td><td>{move.actor_name}</td>
+              <td>{move.reason}{move.order_id ? ' #' + move.order_id : ''}</td><td>{move.actor_name}</td>
             </tr>;
           })}</tbody>
         </table></div> : <p className="owner-empty">No adjustments recorded yet.</p>}
