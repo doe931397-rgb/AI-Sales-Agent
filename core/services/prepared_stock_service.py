@@ -109,10 +109,22 @@ def configure(owner, config):
                 raise LookupError("Select an existing menu item and variant.")
             lock = " FOR UPDATE" if os.getenv("DATABASE_URL", "").strip() else ""
             existing = conn.execute("""
-                SELECT quantity_units, unit, active FROM prepared_stock
+                SELECT quantity_units, unit, active,
+                       serving_units, tolerance_units, extra_units,
+                       extra_tolerance_units FROM prepared_stock
                 WHERE product_id = ? AND variant = ?
             """ + lock, (product_id, variant)).fetchone()
             if existing:
+                # Already placed orders retain the serving allowance that
+                # was allocated before payment; never silently resize it.
+                if existing["active"] and any((
+                    existing["unit"] != unit,
+                    existing["serving_units"] != serving,
+                    existing["tolerance_units"] != tolerance,
+                    existing["extra_units"] != extra,
+                    existing["extra_tolerance_units"] != extra_tolerance,
+                )):
+                    _require_no_open_orders(conn, product_id, variant)
                 if existing["unit"] != unit and existing["quantity_units"]:
                     raise ValueError("Set stock to zero before changing its unit.")
                 conn.execute("""
