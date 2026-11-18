@@ -6,6 +6,7 @@ from playwright.sync_api import sync_playwright
 from core.services import auth_service
 from core.services.owner_access_service import promote_registered_customer
 from data.database import models
+from data.database.customization_schema import create_customization_tables
 
 BASE = "http://127.0.0.1:3000"
 
@@ -13,6 +14,7 @@ def main():
     assert os.getenv("NAIJA_BITES_TEST_MOCK_PAYMENTS") == "1"
     assert os.getenv("NAIJA_BITES_ENV") == "development"
     assert os.getenv("NAIJA_BITES_DATA_DIR", "").startswith("/tmp/naija-bites-chromium-isolated")
+    create_customization_tables()  # Optional tables are not seeded by the mock server.
     suffix=uuid4().hex[:8]
     pwd="Fictional-Browser-Password-2026"
     owner=f"prepared.owner.{suffix}@example.test"
