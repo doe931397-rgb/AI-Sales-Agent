@@ -86,6 +86,19 @@ extra mappings, and combined owner/checkout audit history. Activation is
 blocked when related orders are in `pending_payment`, `confirmed`,
 `preparing` or `out_for_delivery`, preserving historical order records.
 
+## Merge boundary and concurrency safety
+
+The development repository's automatic production-repository proposal workflow
+has a literal false guard on its write-capable job. A development-main merge
+therefore cannot propose or push to the original production repository.
+Re-enabling requires a separate explicitly approved change.
+
+On PostgreSQL, checkout locks base product rows, then all prepared rows
+needed by the cart (including separately prepared add-ons), **before**
+calculating serving sizes, price or stock demand. Owner configuration locks
+the same product row before changing a prepared row. This prevents
+reconfiguration races that could deduct using stale serving estimates.
+
 ## Validation and operator notes
 
 - Backend: `scripts.test_prepared_stock`, `scripts.test_prepared_checkout`
