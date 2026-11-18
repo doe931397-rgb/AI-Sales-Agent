@@ -63,6 +63,8 @@ class OrderService:
         # On final confirmation, serialize product source/config changes
         # with checkout before reading customer prices or prepared add-ons.
         if lock_stock:
+            if any(not isinstance(item, dict) for item in raw_items):
+                raise ValueError('Invalid cart entry.')
             stock_policy.lock_base_products(conn, raw_items)
             stock_policy.lock_prepared_sources(conn, raw_items)
         items, subtotal = [], 0
