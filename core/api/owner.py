@@ -80,6 +80,73 @@ def owner_prepared_stock_adjust(payload: PreparedStockAdjustment, request: Reque
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+
+class StockActivation(BaseModel):
+    product_id: int = Field(gt=0)
+    variant: str = Field(default="standard", min_length=1, max_length=40)
+    active: StrictBool
+
+
+class AddonMapping(BaseModel):
+    product_id: int = Field(gt=0)
+    ingredient_id: int = Field(gt=0)
+    source: str
+    target_product_id: int | None = Field(default=None, gt=0)
+    target_variant: str | None = Field(default=None, max_length=40)
+
+
+class SelfExtra(BaseModel):
+    product_id: int = Field(gt=0)
+    display_name: str = Field(min_length=3, max_length=80)
+    max_quantity: int = Field(default=2, ge=1, le=20)
+
+
+@router.post("/prepared-stock/activate")
+def owner_activate_prepared(payload: StockActivation, request: Request):
+    owner = require_owner(request)
+    try:
+        return prepared_stock.set_active(owner, payload.product_id,
+                                         payload.variant, payload.active)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/prepared-stock/addons/{product_id}")
+def owner_prepared_addons(product_id: int, request: Request):
+    require_owner(request)
+    try:
+        return {"addons": prepared_stock.list_addon_links(product_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/prepared-stock/addons")
+def owner_map_prepared_addon(payload: AddonMapping, request: Request):
+    owner = require_owner(request)
+    try:
+        return prepared_stock.map_addon(
+            owner, payload.product_id, payload.ingredient_id, payload.source,
+            payload.target_product_id, payload.target_variant)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/prepared-stock/self-extra")
+def owner_prepared_self_extra(payload: SelfExtra, request: Request):
+    owner = require_owner(request)
+    try:
+        return prepared_stock.create_self_extra(
+            owner, payload.product_id, payload.display_name, payload.max_quantity)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/me")
 def owner_me(request: Request):
     return {"owner": require_owner(request)}
