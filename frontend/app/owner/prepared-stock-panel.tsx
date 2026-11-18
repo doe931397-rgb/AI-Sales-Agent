@@ -153,7 +153,9 @@ export default function PreparedStockPanel({ products }: { products: MenuProduct
       });
       if (!response.ok) throw new Error(await apiError(response));
       await refresh();
-      setNotice('Serving estimates saved. Customer ordering still uses legacy stock.');
+      setNotice(selected?.active
+        ? 'Serving estimates updated for active prepared stock.'
+        : 'Serving estimates saved. Activate this item to use prepared stock at checkout.');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not save serving estimates.');
     } finally { setBusy(false); }
@@ -262,10 +264,9 @@ export default function PreparedStockPanel({ products }: { products: MenuProduct
         </div>
       </div>
       <p className="prepared-summary" role="note">
-        <strong>Draft feature / not deployed:</strong> Every menu variant starts on
-        legacy checkout stock. You can activate a prepared record once configured.
-        On activation, customer orders use conservative prepared portions.
-        Any changes here affect only the development test environment until approved.
+        <strong>Prepared-food inventory:</strong> Every menu variant starts on
+        legacy stock. On activation, customer orders use conservative prepared
+        portions. Kitchen weights and measures stay inside Owner Mode.
       </p>
       {notice && <p className="owner-message success" role="status">{notice}</p>}
       {error && <p className="owner-message error" role="alert">{error}</p>}
