@@ -120,9 +120,8 @@ def create_tables():
             )
         """)
 
-        # Prepared-food stock is opt-in and deliberately separate from the
-        # legacy portion-count table. Checkout continues to use the legacy
-        # table until a separately tested cutover is approved.
+        # Prepared-food stock is opt-in; inactive variants use legacy counts.
+        # After activation, prepared stock is the sole checkout inventory source.
         # Amounts are whole g, mL, or pieces; no floating point stock math.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS prepared_stock (
