@@ -372,6 +372,33 @@ class PreparedCheckoutTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(order_count,alloc_count)
             self.assertEqual(order_count,int(bool(order_result["success"])))
 
+    async def test_open_order_prevents_serving_resize_but_allows_price_only_edit(self):
+        sid,review=self.review(self.a,[self.item()])
+        placed=self.confirm(sid,review)
+        self.assertTrue(placed["success"],placed)
+        old=self.stock_left(self.jollof)
+        changed=dict(product_id=self.jollof,variant="standard",unit="g",
+            serving_units=300,tolerance_units=10,extra_units=125,
+            extra_tolerance_units=10,extra_price=700)
+        with self.assertRaisesRegex(ValueError,"Resolve existing"):
+            stock.configure(self.owner,changed)
+        self.assertEqual(self.stock_left(self.jollof),old)
+        with models.get_connection() as conn:
+            row=conn.execute("""SELECT serving_units FROM prepared_stock
+                WHERE product_id=?""",(self.jollof,)).fetchone()
+            self.assertEqual(row["serving_units"],250)
+        changed["serving_units"]=250
+        changed["extra_price"]=800
+        result=stock.configure(self.owner,changed)
+        self.assertEqual(result["extra_price"],800)
+        with models.get_connection() as conn:
+            conn.execute("UPDATE orders SET status='delivered' WHERE id=?",
+                         (placed["order_id"],))
+            conn.commit()
+        changed["serving_units"]=300
+        result=stock.configure(self.owner,changed)
+        self.assertEqual(result["serving_units"],300)
+
     async def test_extra_price_change_requires_new_customer_review(self):
         sid,review=self.review(self.a,[self.item(None,1,("Extra Rice",1))])
         stock.configure(self.owner,dict(product_id=self.jollof,variant="standard",
