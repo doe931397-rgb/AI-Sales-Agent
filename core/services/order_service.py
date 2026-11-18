@@ -64,6 +64,7 @@ class OrderService:
         # with checkout before reading customer prices or prepared add-ons.
         if lock_stock:
             stock_policy.lock_base_products(conn, raw_items)
+            stock_policy.lock_prepared_sources(conn, raw_items)
         items, subtotal = [], 0
         for item in raw_items:
             if not isinstance(item, dict):
