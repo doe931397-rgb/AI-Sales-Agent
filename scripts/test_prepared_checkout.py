@@ -330,5 +330,66 @@ class PreparedCheckoutTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(row["stock_quantity"],0)
 
 
+    async def test_same_chicken_stock_shared_by_side_and_addon(self):
+        # Customer buys one chicken standalone plus one as a rice extra.
+        # Both draw from the SAME prepared chicken record, one deduction row.
+        sid,review=self.review(self.a,[
+            self.item(None,1,("Extra Chicken",1)),
+            self.item(self.chicken,1),
+        ])
+        placed=self.confirm(sid,review)
+        self.assertTrue(placed["success"],placed)
+        self.assertEqual(self.stock_left(self.chicken),1)
+        with models.get_connection() as conn:
+            rows=conn.execute("""SELECT quantity_units FROM prepared_order_deductions
+                WHERE order_id=? AND product_id=?""",
+                (placed["order_id"],self.chicken)).fetchall()
+            self.assertEqual(len(rows),1)
+            self.assertEqual(rows[0]["quantity_units"],2)
+
+    async def test_owner_adjustment_and_checkout_compete_atomically(self):
+        stock.adjust(self.owner,dict(product_id=self.jollof,variant="standard",
+            action="set",quantity_units=520,reason="Two standards on hand"))
+        sid,review=self.review(self.a,[self.item(quantity=2)])
+        def adjustment():
+            try:
+                stock.adjust(self.owner,dict(product_id=self.jollof,
+                    variant="standard",action="remove",quantity_units=260,
+                    reason="Cook used a standard portion"))
+                return True
+            except ValueError:
+                return False
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            ordering=pool.submit(self.confirm,sid,review)
+            correction=pool.submit(adjustment)
+            order_result=ordering.result()
+            corrected=correction.result()
+        self.assertEqual(int(bool(order_result["success"]))+int(corrected),1)
+        self.assertIn(self.stock_left(self.jollof),(0,260))
+        with models.get_connection() as conn:
+            order_count=conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
+            alloc_count=conn.execute("SELECT COUNT(*) FROM prepared_order_deductions").fetchone()[0]
+            self.assertEqual(order_count,alloc_count)
+            self.assertEqual(order_count,int(bool(order_result["success"])))
+
+    async def test_extra_price_change_requires_new_customer_review(self):
+        sid,review=self.review(self.a,[self.item(None,1,("Extra Rice",1))])
+        stock.configure(self.owner,dict(product_id=self.jollof,variant="standard",
+            unit="g",serving_units=250,tolerance_units=10,extra_units=125,
+            extra_tolerance_units=10,extra_price=800))
+        stale=self.confirm(sid,review)
+        self.assertFalse(stale["success"])
+        self.assertEqual(self.stock_left(self.jollof),5000)
+        with models.get_connection() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0],0)
+        fresh=CheckoutService(sid).prepare_checkout(
+            "Fictional Customer","08012345678","123 Example Street","Lekki")
+        self.assertTrue(fresh["success"],fresh)
+        self.assertEqual(fresh["summary"]["items"][0]["unit_price"],2300)
+        placed=self.confirm(sid,fresh)
+        self.assertTrue(placed["success"],placed)
+        self.assertEqual(self.stock_left(self.jollof),4605)
+
+
 if __name__ == "__main__":
     unittest.main()
