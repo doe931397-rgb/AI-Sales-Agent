@@ -210,11 +210,14 @@ class PreparedCheckoutPostgresTests(unittest.TestCase):
                         reconfigure.result(timeout=0.4)
                     release.set()
                     result=confirmation.result(timeout=20)
-                    changed=reconfigure.result(timeout=20)
+                    # A placed pending-payment order now protects the
+                    # original serving rule; the owner change must fail after
+                    # waiting for checkout's prepared row lock.
+                    with self.assertRaisesRegex(ValueError,"Resolve existing"):
+                        reconfigure.result(timeout=20)
         finally:
             release.set()
         self.assertTrue(result["success"],result)
-        self.assertEqual(changed["serving_units"],500)
         with models.get_connection() as conn:
             row=conn.execute("""SELECT quantity_units FROM prepared_order_deductions
                 WHERE product_id=? AND order_id=?""",(target,result["order_id"])).fetchone()
@@ -222,10 +225,17 @@ class PreparedCheckoutPostgresTests(unittest.TestCase):
             stock_row=conn.execute("""SELECT quantity_units,serving_units
                 FROM prepared_stock WHERE product_id=?""",(target,)).fetchone()
             self.assertEqual((stock_row["quantity_units"],stock_row["serving_units"]),
-                             (260,500))
+                             (260,250))
             self.assertEqual(conn.execute(
                 "SELECT quantity FROM inventory WHERE product_id=?",(target,)
             ).fetchone()["quantity"],10)
+            conn.execute("UPDATE orders SET status = 'delivered' WHERE id = ?",
+                         (result["order_id"],))
+        # Only after the committed order is resolved may an owner resize
+        # portions; the remaining stock does not change during reconfiguration.
+        changed=stock.configure(self.owner,payload(500))
+        self.assertEqual(changed["serving_units"],500)
+        self.assertEqual(changed["quantity_units"],260)
 
 
 if __name__ == "__main__":
