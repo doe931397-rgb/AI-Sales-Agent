@@ -60,6 +60,32 @@ def lock_base_products(conn, items):
     ).fetchall()
 
 
+def lock_prepared_sources(conn, items):
+    """Lock all source rows before reading serving quantities and prices.
+
+    Checkout has already locked base product rows, stabilizing their mappings.
+    Include any separately stocked add-on targets in deterministic lock order.
+    SQLite BEGIN IMMEDIATE already serializes all writers.
+    """
+    if not _postgres():
+        return
+    keys = {(item["product_id"], item.get("variant", "standard"))
+            for item in items if isinstance(item, dict)
+            and type(item.get("product_id")) is int}
+    ids = sorted({pid for pid, _ in keys})
+    if ids:
+        marks = ",".join("?" for _ in ids)
+        targets = conn.execute("""
+            SELECT target_product_id, target_variant
+            FROM prepared_stock_addon_links
+            WHERE source = 'prepared_other' AND product_id IN (
+        """ + marks + ")", ids).fetchall()
+        keys.update((row["target_product_id"], row["target_variant"])
+                    for row in targets)
+    for pid, variant in sorted(keys):
+        active_prepared(conn, pid, variant, lock=True)
+
+
 def addon_selection(conn, product_id, variant, ingredient_id):
     """Return either legacy ingredient, same-pot extra, or other prepared side.
 
