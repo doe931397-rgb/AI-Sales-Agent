@@ -63,8 +63,17 @@ class OrderService:
         # On final confirmation, serialize product source/config changes
         # with checkout before reading customer prices or prepared add-ons.
         if lock_stock:
-            if any(not isinstance(item, dict) for item in raw_items):
-                raise ValueError('Invalid cart entry.')
+            # Validate BEFORE constructing lock keys: an invalid variant
+            # (e.g. an array or object) must not produce an uncaught 500.
+            for raw_item in raw_items:
+                if not isinstance(raw_item, dict):
+                    raise ValueError('Invalid cart entry.')
+                if (type(raw_item.get('product_id')) is not int or
+                    type(raw_item.get('quantity')) is not int or
+                    raw_item['quantity'] <= 0 or
+                    not isinstance(raw_item.get('variant', 'standard'), str) or
+                    not raw_item.get('variant', 'standard').strip()):
+                    raise ValueError('Invalid cart item.')
             stock_policy.lock_base_products(conn, raw_items)
             stock_policy.lock_prepared_sources(conn, raw_items)
         items, subtotal = [], 0
