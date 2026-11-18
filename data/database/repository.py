@@ -118,7 +118,7 @@ def get_stocks_by_variants(product_variants):
                         ELSE i.quantity END AS quantity
                    FROM inventory i LEFT JOIN prepared_stock ps
                      ON ps.product_id = i.product_id AND ps.variant = i.variant
-                   WHERE """ + where.replaceAll("product_id = ?", "i.product_id = ?").replaceAll("variant = ?", "i.variant = ?"),
+                   WHERE """ + where.replace("product_id = ?", "i.product_id = ?").replace("variant = ?", "i.variant = ?"),
                 params,
             ).fetchall()
             stocks.update(((row["product_id"], row["variant"]), row["quantity"])
